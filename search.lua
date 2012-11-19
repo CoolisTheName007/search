@@ -131,7 +131,7 @@ function getNameExpansion(s)
 end
 
 ---taken from https://github.com/davidm/lua-glob-pattern , by davidm
---only needed for filename conversion, slahes are dealt with directly for iteration purposes
+--only needed for filename conversion, slashes are dealt with directly for iteration purposes
 function globtopattern(g)
 
   local p = "^"  -- pattern being built
