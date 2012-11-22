@@ -1,11 +1,59 @@
 ---filesystem API by CoolisTheName007
 --The hard work here was writing the iterators to be efficient; for instance they don't use coroutines or recursion.
 
+---iterator over files/dirs in directory dir and with maximum depth of search depth, default is infinite
+--following refer to the iterator returned, not the iterator created.
+--@treturn string path
+function iterTree(dir,depth)
+	dir=dir or ''
+	local index={0}
+	local dir_index={0}
+	local ts={{dir,fs.list(dir),{}}}
+	local level=1
+	local t_dir
+	return function()
+		repeat
+			index[level]=index[level]+1
+			name=ts[level][2][index[level]]
+			if name==nil then
+				if (not ts[level][4]) and ts[level][3][1] then
+					ts[level][4]=true
+					ts[level][2],ts[level][3]=ts[level][3],ts[level][2]
+					index[level]=0
+				else
+					level=level-1
+					if level==0 then return end
+					dir=ts[level][1]
+				end
+			else
+				t_dir=ts[level][1]..'/'..name
+				if fs.isDir(t_dir) then
+					if ts[level][4] then
+						if depth~=level then
+							level=level+1
+							dir=t_dir
+							ts[level]={dir,fs.list(dir),{}}
+							index[level]=0
+							dir_index[level]=0
+						else
+						end
+					else
+						dir_index[level]=dir_index[level]+1
+						ts[level][3][dir_index[level]]=name
+						break --send dir path
+					end
+				else
+					break
+				end
+			end
+		until false
+		return dir..'/'..name
+	end
+end
+
 ---iterator over files in directory dir and with maximum depth of search depth, default is infinite
 --following refer to the iterator returned, not the iterator created.
---@treturn string name of the file
---@treturn string directory where the file is
-
+--@treturn string path
 function iterFiles(dir,depth)
 	--dir string = base directory; default ''
 	--depth string = how many directories levels the iterator will open; default infinity
@@ -58,13 +106,13 @@ function iterFiles(dir,depth)
 				end
 			end
 		until false
-		return name,dir
+		return dir..'/'..name
 	end
 end
----iterator over files in directory dir and with maximum depth of search depth, default is infinite
+
+---iterator over dirs in directory dir and with maximum depth of search depth, default is infinite
 --following refer to the iterator returned, not the iterator created.
---@treturn string name of the dir
---@treturn string directory where the dir is
+--@treturn string path
 function iterDir(dir,depth)
 	--dir string = base directory; default ''
 	--depth integer = how many 'directory levels' the iterator will open; default infinity
@@ -111,7 +159,7 @@ function iterDir(dir,depth)
 			dir_index[level]=0
 			ts[level]={t_dir,fs.list(t_dir)}
 		end
-		return name,dir
+		return dir..'/'..name
 	end
 end
 
@@ -130,17 +178,19 @@ function getNameExpansion(s)
 	return name or s,expa
 end
 
----taken from https://github.com/davidm/lua-glob-pattern , by davidm
---only needed for filename conversion, slashes are dealt with directly for iteration purposes
-function globtopattern(g)
+
+---WARNING: for compatibility with Lua ?, ? was replaced by # in globs; taken from https://github.com/davidm/lua-glob-pattern , by davidm
+--only needed for filename conversion, slashes are dealt with directly for iteration purposes.
+local function globtopattern(g)
 
   local p = "^"  -- pattern being built
   local i = 0    -- index in g
   local c        -- char at index i in g.
 
-  -- unescape glob char
+  
+    -- unescape glob char
   local function unescape()
-    if c == '//' then
+    if c == '\\' then
       i = i + 1; c = string.sub(g,i,i)
       if c == '' then
         p = '[^]'
@@ -215,23 +265,22 @@ function globtopattern(g)
     end
     return true
   end
-
-  -- Convert tokens.
+ --Convert tokens.
   while 1 do
 	i = i + 1; c = string.sub(g,i,i)
     if c == '' then
       p = p .. '$'
       break
-    elseif c == '?' then
+    elseif c == '#' then --?->#
       p = p .. '.'
     elseif c == '*' then
       p = p .. '.*'
     elseif c == '[' then
       if not charset() then break end
-    elseif c == '//' then
+    elseif c == '\\' then
       i = i + 1; c = string.sub(g,i,i)
       if c == '' then
-        p = p .. '//$'
+        p = p .. '\\$'
         break
       end
       p = p .. escape(c)
@@ -243,13 +292,14 @@ function globtopattern(g)
 end
 
 ---turns a glob into a table structure proper for iterPatterns.
-function compact(g)
+local function compact(g)
 	local nl={}
 	local s1
 	local n=0
-	for c in string.gmatch(g,'[\\/]*([^/^\\]*)[\\/]*') do
+	for c in string.gmatch(g,'[\\/]*([^/\\]*)[\\/]*') do
+		--print(c)
 		if c:match('^[%w%s]*$') then
-			s1=s1 and s1..'/'..c or c 
+			s1=s1 and s1..'/'..c or c
 		else
 			n=n+1
 			nl[n]={s1,globtopattern(c)}
@@ -258,29 +308,42 @@ function compact(g)
 	end
 	if s1 then
 		if n==0 then
-			nl={nil,s1}
+			n=n+1
+			nl[n]={nil,s1}
 		else
 			nl[n][3]=s1
 		end
 	end
-	if n~=0 then nl[1][1]=nl[1][1] or '' end
 	return nl
 end
 
----accepts the following table structure: {t1,...,tn}, where ti is:
+---iterator creator over valid paths defined by a table with the structure: {t1,...,tn}, where ti is:
+--Some special cases for small tables are handled diferently
 --for i<n: {dir,pat} - dir is the directory where to look for names matching the pattern pat
 --for i=n: {dir,pat,ending} -same but will combine the name (after successful match with pat) with the optional ending (can be nil) and check the resulting path
---e.g., g={{'APIS','*'},{nil,'A'},{'B/C','?','aq/qwerty'}} will search in all subfolders of APIS for subfolders named A, and in each of those for a folder B
+--e.g., g={{'APIS','*'},{nil,'A'},{'B/C','#','aq/qwerty'}} will search in all subfolders of APIS for subfolders named A, and in each of those for a folder B
 --containing a folder C, and for all one-lettered folders in that folder for a folder aq containing a  folder/file named qwerty.
-function iterPatterns(l)
+local function iterPatterns(l)
 	local n=#l
 	-- print('n',n)
 	if n==0 then return function () return end end
+	if n~=0 then l[1][1]=l[1][1] or '' end
+	if n==1 and not l[1][3] then
+		done=false
+		return function ()
+				if not done and fs_exists(l[1][2]) then
+					done=true
+					return l[1][2]
+				end
+			end
+	end
+	-- pprint(l)
+	-- read()
 	local dir=l[1][1]
 	-- print('dir',dir)
 	local index={0}
 	local ts
-	ts={{dir,fs.isDir(dir) and fs.list(dir) or {}}}
+	ts={{dir,fs_isDir(dir) and fs_list(dir) or {}}}
 	-- read()
 	-- pprint(ts)
 	-- read()
@@ -318,7 +381,7 @@ function iterPatterns(l)
 						_=l[level][3]
 						if _ then
 							t_dir=t_dir..'/'.._
-							if fs.exists(t_dir) then
+							if fs_exists(t_dir) then
 								path=t_dir
 								break
 							end
@@ -326,22 +389,22 @@ function iterPatterns(l)
 							path=t_dir
 							break
 						end
-					elseif fs.isDir(t_dir) then
+					elseif fs_isDir(t_dir) then
 						-- print('a dir!')
 						level=level+1
 						_=l[level][1]
 						if _ then
 							t_dir=t_dir..'/'.._
-							if fs.exists(t_dir) then
+							if fs_exists(t_dir) then
 								dir=t_dir
-								ts[level]={dir,fs.list(dir)}
+								ts[level]={dir,fs_list(dir)}
 								index[level]=0
 							else
 								level=level-1
 							end
 						else
 							dir=t_dir
-							ts[level]={dir,fs.list(dir)}
+							ts[level]={dir,fs_list(dir)}
 							index[level]=0
 						end
 					end
@@ -352,9 +415,9 @@ function iterPatterns(l)
 	end
 end
 
----iterator creator, over the valid paths defined by glob g,e.g */filenumber?to
+---iterator creator, over the valid paths defined by glob @g, e.g */filenumber?to
 -- see the unix part of the table at http://en.wikipedia.org/wiki/Glob_(programming) .
---@treturn string path to matching of the dir
+--@treturn string path
 --@usage
 --for path in search.iterGlob('*/stuff?/a*') do
 --	print(path)
